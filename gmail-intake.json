@@ -1,0 +1,239 @@
+{
+  "name": "Email Support - Intake (Gmail Router)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "in:inbox -from:me -from:noreply -from:no-reply -from:mailer-daemon -category:promotions -category:social -category:updates -category:forums",
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        544
+      ],
+      "id": "ef1d92ff-932e-4e2c-aab2-0b0ac08df089",
+      "name": "Gmail Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Runs for ALL incoming emails (one item per email) and keeps every email separate.\nconst store = $getWorkflowStaticData('global');\nstore.processed = store.processed || {};\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  const j = item.json;\n\n  const messageId = String(j.id || j.messageId || j.gmailMessageId || '');\n  const threadId = String(j.threadId || '');\n  const from = String(j.from?.value?.[0]?.address || j.from || '');\n  const subject = String(j.subject || '(No subject)');\n  const body = String(j.textPlain || j.text || j.body || j.snippet || '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  const injectionDetected =\n    /(ignore (all|any|previous) instructions|reveal (your|the) (system|secret)|show.*(prompt|credential|api key)|bypass.*security)/i.test(body);\n\n  const sensitiveEmail =\n    /(refund|chargeback|cancel|cancellation|complaint|lawsuit|legal|contract|payment|invoice|password|security|api key|angry|unhappy)/i.test(subject + ' ' + body);\n\n  const h = j.headers || {};\n  const isAutomated = Boolean(\n    (h['auto-submitted'] && String(h['auto-submitted']).toLowerCase() !== 'no') ||\n    /bulk|junk|list|auto_reply/i.test(String(h['precedence'] || '')) ||\n    h['list-unsubscribe'] || h['x-autoreply'] || h['x-autorespond']\n  );\n  const duplicate = Boolean(messageId && store.processed[messageId]) || isAutomated;\n\n  // remember this message so it is never processed twice\n  if (messageId && !duplicate) {\n    store.processed[messageId] = { at: new Date().toISOString() };\n  }\n\n  results.push({\n    json: {\n      ...j, messageId, threadId, from, subject, body,\n      injectionDetected, sensitiveEmail, duplicate,\n      duplicateText: duplicate ? 'true' : 'false',\n      needsHumanApproval: injectionDetected || sensitiveEmail,\n      processingStatus: 'started'\n    }\n  });\n}\n\n// forget messages older than 30 days\nfor (const key of Object.keys(store.processed)) {\n  const savedAt = store.processed[key]?.at;\n  if (savedAt && Date.now() - Date.parse(savedAt) > 30 * 24 * 60 * 60 * 1000) {\n    delete store.processed[key];\n  }\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        544
+      ],
+      "id": "51a8c8ac-ed14-4d73-983c-4ecdac342ad7",
+      "name": "Security + Duplicate Guard"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6953fba1-bc46-4cb7-954d-65fcacb67751",
+              "leftValue": "={{ $json.duplicateText }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        656,
+        544
+      ],
+      "id": "b2e04c1a-d4cd-4634-b1ed-407611f70c28",
+      "name": "New Email Only?"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuMGyYUKOrqNZyvp",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/AuMGyYUKOrqNZyvp",
+          "cachedResultName": "Email Support Processor"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1168,
+        416
+      ],
+      "id": "c79da52e-208b-414b-a45f-684e608a6c52",
+      "name": "Run Processor (one execution per email)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        896,
+        688
+      ],
+      "id": "c8a6baec-7b6c-45fe-b960-c426c5e2f7f2",
+      "name": "Skipped (duplicate or automated mail)"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        416
+      ],
+      "id": "f18e41f3-17c3-4842-a39d-0d45b677e4df",
+      "name": "1 email at a time"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1408,
+        416
+      ],
+      "id": "e3b18ac0-1e31-4a06-b3e5-774c5003daae",
+      "name": "Wait 3s (pace the load)",
+      "webhookId": "7d1f3c2a-9999-4a99-8a99-000000000009"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Security + Duplicate Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security + Duplicate Guard": {
+      "main": [
+        [
+          {
+            "node": "New Email Only?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Email Only?": {
+      "main": [
+        [
+          {
+            "node": "1 email at a time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skipped (duplicate or automated mail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Processor (one execution per email)": {
+      "main": [
+        [
+          {
+            "node": "Wait 3s (pace the load)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1 email at a time": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Run Processor (one execution per email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 3s (pace the load)": {
+      "main": [
+        [
+          {
+            "node": "1 email at a time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Dhaka",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "AuMGyYUKOrqNZyvp"
+  },
+  "versionId": "7efca2d1-21be-481c-8d0a-3af3a8a01ec2",
+  "meta": {
+    "instanceId": "ce02fd7b0b42d74009b668c09fad3e1cd2cfd6f96cbfddc35bc9739a33a28dc7"
+  },
+  "nodeGroups": [],
+  "id": "oeDyZmSiNIObly9n",
+  "tags": []
+}
